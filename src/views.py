@@ -1,15 +1,14 @@
-from sys import exc_info
+from initialize_db import insert_data_into_db, env
+from authentication import token_auth
+from models import User, Watch, Movie
+from app import app, db
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Blueprint, request,  jsonify, request, make_response
+from flask import request,  jsonify, request, make_response
 import jwt
 import datetime
-from authentication import token_auth
-from initialize_db import insert_data_into_db, pgConn, env
-
-view = Blueprint('view', __name__)
 
 
-@ view.route('/api/sign_up', methods=['POST'])
+@app.route('/api/sign_up', methods=['POST'])
 def sign_up():
     """Sign up route
 
@@ -27,11 +26,10 @@ def sign_up():
             password1 = content['password1']
             password2 = content['password2']
 
-            conn = pgConn.cursor()
-            conn.execute(
-                "SELECT email FROM users WHERE email = %s", (email,))
-            row = conn.fetchall()
-            if row:
+            # user = User.query
+            user = User.query.filter_by(email=email).first()
+
+            if user:
                 return jsonify({'message': 'Account already exists.'})
             elif len(email) < 4:
                 return jsonify({'message': 'Email must be greater than 3 characters.'})
@@ -41,19 +39,23 @@ def sign_up():
                 return jsonify({'message': 'Passwords don\'t match.'})
             elif len(password1) < 7:
                 return jsonify({'message': 'Password must be at least 7 characters.'})
-            conn.execute("INSERT INTO users (first_name,email,password) VALUES(%s,%s,%s)",
-                         (first_name, email, generate_password_hash(password1, method='sha256')))
-            pgConn.commit()
-            conn.close()
+            else:
+                user = User.query.filter_by(first_name=first_name).first()
+                if user:
+                    return jsonify({'message': 'This name already taken'})
+
+            new_user = User(
+                first_name=first_name, email=email, password=generate_password_hash(password1, method='sha256'))
+            db.session.add(new_user)
+            db.session.commit()
             return jsonify({'message': 'Registration successfully completed!'})
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/login', methods=['POST'])
+@app.route('/api/login', methods=['POST'])
 def login():
-    """Login route 
+    """Login route
 
     Returns:
         token or error message if failed
@@ -65,25 +67,21 @@ def login():
             if not auth or not auth.username or not auth.password:
                 return make_response('Authentication Failed.', 401, {'WWW-Authenticate': 'Basic realm="Login required!"'})
 
-            conn = pgConn.cursor()
-            conn.execute("SELECT * FROM users WHERE first_name = %s",
-                         (auth.username,))
-            row = conn.fetchone()
-            if row:
-                if check_password_hash(row[3], auth.password):
-                    token = jwt.encode({'id': row[0], 'exp': datetime.datetime.utcnow(
+            user = User.query.filter_by(first_name=auth.username).first()
+
+            if user:
+                if check_password_hash(user.password, auth.password):
+                    token = jwt.encode({'id': user.id, 'exp': datetime.datetime.utcnow(
                     ) + datetime.timedelta(minutes=30)}, env.str('SECRET_KEY'))
-                    print(token)
 
                     return jsonify({'token': token.decode('UTF-8')})
                 return make_response('Authentication Failed.', 401, {'WWW-Authenticate': 'Basic realm="Incorrect password, try again.'})
             return make_response('Authentication Failed.', 401, {'WWW-Authenticate': 'User does not exist.'})
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/movies', methods=['GET'])
+@app.route('/api/movies', methods=['GET'])
 def available_movies():
     """This function is accessible to non-members.
 
@@ -91,41 +89,46 @@ def available_movies():
         json: keys(category, movie_rating, star), values(Drama, Sci-Fi, Leonardo DiCaprio)
 
     Returns:
-        json: returns all available movies with and without criteria 
+        json: returns all available movies with and without criteria
     """
     try:
-        conn = pgConn.cursor()
-        query = "SELECT * from movies"
-        conn = insert_data_into_db(conn, query)
-        row = conn.fetchall()
+        colDict = {"name": Movie.name, "category": Movie.category,
+                   "movie_rating": Movie.movie_rating, "release_year": Movie.release_year, "star":  Movie.star}
+
+        movie = Movie.query.all()
+
+        if not movie:
+            insert_data_into_db()
+            movie = Movie.query.all()
         content = request.get_json()
         if content:
-            critetia_query = "SELECT * FROM movies where "
+            criteria = []
             for i, (key, value) in enumerate(content.items()):
                 if isinstance(value, str):
-                    critetia_query += key + ' LIKE ' + "'%" + value + "%' "
+                    value = "%{}%".format(value)
+                    if key in colDict:
+                        criteria.append(colDict[key].like(value))
                 # if criteria value is integer
                 else:
-                    critetia_query += key + '>=' + str(value)
-                if i+1 != len(content.items()):
-                    critetia_query += 'and '
-            conn.execute(critetia_query)
-            row = conn.fetchall()
-        if not row:
+                    if key in colDict:
+                        criteria.append(colDict[key] >= value)
+            movie = Movie.query.filter(criteria[0]).all()
+            for i in range(1, len(criteria)):
+                query = Movie.query.filter(criteria[i]).all()
+                movie = list(set.intersection(set(movie), set(query)))
+
+        if not movie:
             return jsonify({"message": "No movies found"})
-        # column names
-        colnames = [col[0] for col in conn.description]
         results = []
-        for data in row:
-            results.append(dict(zip(colnames, data)))
-        conn.close()
+        for data in movie:
+            results.append(dict((column.name, getattr(data, column.name))
+                                for column in data.__table__.columns))
         return jsonify(results)
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/movies/<movie_name>', methods=['GET'])
+@ app.route('/api/movies/<movie_name>', methods=['GET'])
 def get_details(movie_name):
     """ This function is accessible to non-members.
     Args:
@@ -135,31 +138,26 @@ def get_details(movie_name):
         json: Details about a specific movie based on movie_name
     """
     try:
-        conn = pgConn.cursor()
-        query = "SELECT * from movies where name"
-        query += ' LIKE ' + "'%" + movie_name + "%' "
-        conn.execute(query)
-        row = conn.fetchall()
-        if not row:
+        movie_name = "%{}%".format(movie_name)
+        movie = Movie.query.filter(Movie.name.like(movie_name)).all()
+        if not movie:
             return jsonify({"message": "This movie does not exist"})
-        colnames = [col[0] for col in conn.description]
         results = []
-        for data in row:
-            results.append(dict(zip(colnames, data)))
-        conn.close()
+        for data in movie:
+            results.append(dict((column.name, getattr(data, column.name))
+                                for column in data.__table__.columns))
         return jsonify(results)
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/movies/<movie_id>/rent', methods=['POST'])
-@token_auth
+@ app.route('/api/movies/<movie_id>/rent', methods=['POST'])
+@ token_auth
 def rent_movie(current_user, movie_id):
     """Rent route (This function is accessible to members only.)
 
     Args:
-        current_user (dict): credentials current user 
+        current_user (dict): credentials current user
         movie_id (str): The movie that the user desires to rent
 
     Returns:
@@ -167,34 +165,34 @@ def rent_movie(current_user, movie_id):
     """
     try:
         if request.method == "POST":
-            conn = pgConn.cursor()
-            conn.execute("SELECT * from movies where id = %s", movie_id)
-            row = conn.fetchone()
-            movie_name = row[1]
-            if not row:
+            movie = Movie.query.filter_by(id=movie_id).first()
+            if not movie:
                 return jsonify({"message": "This movie id does not exist"})
-            conn.execute(
-                "SELECT movie_id, rent_date, return_date from watch where movie_id = %s and rent_date is not null and return_date is null and user_id = %s", (movie_id, current_user[0]))
-            row = conn.fetchone()
-            if row:
+            watch = Watch.query.filter_by(
+                id=movie_id, user_id=current_user.id).first()
+            # conn.execute(
+            #     "SELECT movie_id, rent_date, return_date from watch where movie_id = %s and rent_date is not null and return_date is null and user_id = %s", (movie_id, current_user[0]))
+            # row = conn.fetchone()
+            if watch:
                 return jsonify({"message":  "You have already rented this movie. Return it in order to be able to rent it again."})
-            conn.execute("INSERT INTO watch(movie_id,user_id,username,rent_date,return_date) VALUES (%s, %s, %s, %s, %s)", (movie_id,
-                                                                                                                            current_user[0], current_user[1], datetime.date.today(), None))
-            pgConn.commit()
-            conn.close()
-            return jsonify({"message": f"You have successfully rented the movie {movie_name}.  The final amount will be calculated when you will return it."})
+            new_rent = Watch(
+                movie_id=movie_id, user_id=current_user.id, username=current_user.first_name, rent_date=datetime.date.today(), return_date=None)
+            db.session.add(new_rent)
+            # ("INSERT INTO watch(movie_id,user_id,username,rent_date,return_date) VALUES (%s, %s, %s, %s, %s)", (movie_id,
+            # pgConn.commit()
+            db.session.commit()
+            return jsonify({"message": f"You have successfully rented the movie {movie.name}.  The final amount will be calculated when you will return it."})
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/movies/<movie_id>/return', methods=['PATCH'])
-@token_auth
+@ app.route('/api/movies/<movie_id>/return', methods=['PATCH'])
+@ token_auth
 def return_movie(current_user, movie_id):
     """Return route "Rent route (This function is accessible to members only.)
 
     Args:
-        current_user (dict): credentials current user 
+        current_user (dict): credentials current user
         movie_id (str): The movie that the user wants to return
 
     Returns:
@@ -202,29 +200,23 @@ def return_movie(current_user, movie_id):
     """
     try:
         if request.method == "PATCH":
-            conn = pgConn.cursor()
-            conn.execute("SELECT * from movies where id = %s", movie_id)
-            row = conn.fetchone()
-            if not row:
+            movie = Movie.query.filter_by(id=movie_id).first()
+            if not movie:
                 return jsonify({"message": "This movie id does not exist"})
-            conn.execute(
-                "SELECT movie_id, rent_date, return_date from watch where movie_id = %s and rent_date is not null and return_date is null and user_id = %s", (movie_id, current_user[0]))
-            row = conn.fetchone()
-            if row:
-                time = datetime.date.today() - row[1]
+            watch = Watch.query.filter_by(
+                id=movie_id, user_id=current_user.id, return_date=None).first()
+            if watch:
+                time = datetime.date.today() - watch.rent_date
                 total_amount = get_amount(time.days).get_json()
-                conn.execute(
-                    "UPDATE watch set return_date = %s where user_id = %s and movie_id = %s", (datetime.date.today(), current_user[0], movie_id))
-                pgConn.commit()
+                watch.return_date = datetime.date.today()
+                db.session.commit()
                 return jsonify({"message": f"You have successfully returned the movie. The total amount of this rent is {total_amount['Amount']}"})
-            conn.close()
             return jsonify({"message": "Rent this movie in order to return it."})
     except Exception as ex:
-        pgConn.rollback()
         return jsonify({"message": str(ex)})
 
 
-@ view.route('/api/movies/amount/<int:days>', methods=['GET'])
+@ app.route('/api/movies/amount/<int:days>', methods=['GET'])
 def get_amount(days):
     """ Amount route (This function is accessible to non-members.)
 

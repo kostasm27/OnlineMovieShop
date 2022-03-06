@@ -1,7 +1,8 @@
 from functools import wraps
 from flask import request, jsonify
 import jwt
-from initialize_db import pgConn, env
+from initialize_db import env
+from models import User
 
 
 def token_auth(auth):
@@ -28,11 +29,8 @@ def token_auth(auth):
             return jsonify({'message': 'Token is missing'}), 401
         try:
             data = jwt.decode(token,  env.str('SECRET_KEY'))
-            conn = pgConn.cursor()
-            conn.execute(f"SELECT * from users where id = {data['id']}")
-            row = conn.fetchall()
-            current_user = row[0]
-            conn.close()
+            user = User.query.filter_by(id=data['id']).first()
+            current_user = user
         except Exception as ex:
             print(ex)
             return jsonify({'message': 'Token is invalid'}), 401

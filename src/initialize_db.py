@@ -1,11 +1,9 @@
 from environs import Env
-import psycopg2
+from app import db
+from models import Movie
 env = Env()
 env.read_env()
 
-
-pgConn = psycopg2.connect(dbname=env.str('DB_NAME'), user=env.str('DB_USERNAME'),
-                          password=env.str('DB_PASSWORD'), host=env.str('DB_HOST'), port=env.str('DB_PORT'))
 
 Movies = (
     (1, 'Avatar', 'Sci-Fi', '2009', '7.8', 'Sam Worthington'),
@@ -18,7 +16,7 @@ Movies = (
 )
 
 
-def insert_data_into_db(conn, query, *params):
+def insert_data_into_db():
     """Inserts data into database if database is empty
 
     Args:
@@ -28,15 +26,8 @@ def insert_data_into_db(conn, query, *params):
     Returns:
         row(list): The data from the query
     """
-    args = [arg for arg in params]
-    conn = pgConn.cursor()
-    conn.execute("SELECT * from movies")
-    row = conn.fetchall()
-    if not len(row):
-        conn.executemany(
-            "INSERT INTO movies(id,name,category,release_year,movie_rating,star) VALUES (%s, %s, %s, %s, %s, %s)", Movies)
-        pgConn.commit()
-        conn.execute(query, args) if args else conn.execute(query)
-    else:
-        conn.execute(query, args) if args else conn.execute(query)
-    return conn
+    for data in Movies:
+        movie = Movie(id=data[0], name=data[1], category=data[2],
+                      release_year=data[3], movie_rating=data[4], star=data[5])
+        db.session.add(movie)
+        db.session.commit()
