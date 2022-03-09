@@ -7,7 +7,7 @@ class Movie(db.Model):
     id = db.Column(db.Integer, primary_key=True, nullable=False)
     name = db.Column(db.String(50), primary_key=True,
                      nullable=False,  unique=True)
-    category = db.Column(db.String(50))
+    categories = db.Column(db.String(50))
     release_year = db.Column(db.String(4))
     movie_rating = db.Column(db.Float)
     star = db.Column(db.String(150))

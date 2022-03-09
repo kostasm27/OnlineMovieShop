@@ -1,3 +1,4 @@
+from re import L
 from initialize_db import insert_data_into_db, env
 from authentication import token_auth
 from models import User, Watch, Movie
@@ -86,13 +87,13 @@ def available_movies():
     """This function is accessible to non-members.
 
     Args for criteria:
-        json: keys(category, movie_rating, star), values(Drama, Sci-Fi, Leonardo DiCaprio)
+        json: keys(categories, movie_rating, star), values(Drama, Sci-Fi, Leonardo DiCaprio)
 
     Returns:
         json: returns all available movies with and without criteria
     """
     try:
-        colDict = {"name": Movie.name, "category": Movie.category,
+        colDict = {"name": Movie.name, "categories": Movie.categories,
                    "movie_rating": Movie.movie_rating, "release_year": Movie.release_year, "star":  Movie.star}
 
         movie = Movie.query.all()
@@ -105,7 +106,13 @@ def available_movies():
             criteria = []
             for i, (key, value) in enumerate(content.items()):
                 if isinstance(value, str):
-                    value = "%{}%".format(value)
+                    if ',' in value:
+                        temp_list = value.split(',')
+                        for value in temp_list:
+                            value = "%{}%".format(value)
+                            criteria.append(colDict[key].like(value))
+                    else:
+                        value = "%{}%".format(value)
                     if key in colDict:
                         criteria.append(colDict[key].like(value))
                 # if criteria value is integer
@@ -151,6 +158,27 @@ def get_details(movie_name):
         return jsonify({"message": str(ex)})
 
 
+@ app.route('/api/movies/user/rented-movies', methods=['GET'])
+@ token_auth
+def get_rented_movies(current_user):
+    """ Rented Movies route (This function is accessible to members only.)
+    Returns:
+        json: Rented movies of the current_user 
+    """
+    try:
+        user = Watch.query.filter_by(user_id=current_user.id).all()
+        print(user)
+        if not user:
+            return jsonify({"message": "You have not rented any movies yet."})
+        results = []
+        for data in user:
+            results.append(dict((column.name, getattr(data, column.name))
+                                for column in data.__table__.columns))
+        return jsonify(results)
+    except Exception as ex:
+        return jsonify({"message": str(ex)})
+
+
 @ app.route('/api/movies/<movie_id>/rent', methods=['POST'])
 @ token_auth
 def rent_movie(current_user, movie_id):
@@ -169,7 +197,7 @@ def rent_movie(current_user, movie_id):
             if not movie:
                 return jsonify({"message": "This movie id does not exist"})
             watch = Watch.query.filter_by(
-                id=movie_id, user_id=current_user.id).first()
+                movie_id=movie_id, user_id=current_user.id).first()
             # conn.execute(
             #     "SELECT movie_id, rent_date, return_date from watch where movie_id = %s and rent_date is not null and return_date is null and user_id = %s", (movie_id, current_user[0]))
             # row = conn.fetchone()

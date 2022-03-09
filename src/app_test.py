@@ -8,7 +8,7 @@ env.read_env()
 
 class Tests(unittest.TestCase):
     api_url = "http://127.0.0.1:5000/api"
-    movie_object = {"category": "Dr", "star": "Leo"}
+    movie_object = {"categories": "Dr,Romance", "star": "Leo"}
     test_user = {"email": "kostantinosmavros28@gmail.com", "first_name": "kostas",
                  "password1": "kostaskostas", "password2": "kostaskostas"}
 
@@ -28,14 +28,14 @@ class Tests(unittest.TestCase):
         result = requests.get(Tests.api_url + "/movies",
                               json=Tests.movie_object)
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), [{"category": "Drama", "id": 3, "movie_rating": 7.8,
+        self.assertEqual(result.json(), [{"categories": "Drama,Romance", "id": 3, "movie_rating": 7.8,
                          "name": "Titanic", "release_year": "1997", "star": "Leonardo DiCaprio"}])
 
     def test_get_movie_details(self):
-        result = requests.get(Tests.api_url + f"/movies/{2}")
+        result = requests.get(Tests.api_url + f"/movies/Avengers")
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), [{"category": "Sci-Fi", "id": 2, "movie_rating": 8.4,
-                         "name": "Avengers: Endgame", "release_year": "2019", "star": "Robert Downey Jr."}])  # second movie
+        self.assertEqual(result.json(), [{"categories": "Action,Adventure,Sci-Fi", "id": 2, "movie_rating": 8.4, "name": "Avengers: Endgame", "release_year": "2019", "star": "Robert Downey Jr."}, {
+                         "categories": "Action,Adventure,Sci-Fi", "id": 6, "movie_rating": 8.4, "name": "Avengers: Infinity War", "release_year": "2018", "star": "Robert Downey Jr."}])
 
     def test_rent_a_movie(self):
         login = requests.post(
@@ -44,7 +44,7 @@ class Tests(unittest.TestCase):
         header = {'x-access-token': login.json()['token']}
 
         rent = requests.post(
-            Tests.api_url + f"/movies/{2}/rent", headers=header)
+            Tests.api_url + f"/movies/{5}/rent", headers=header)
         self.assertEqual(login.status_code, 200)
         self.assertEqual(rent.json(), {
                          "message": "You have successfully rented the movie Avengers: Endgame.  The final amount will be calculated when you will return it."})
@@ -56,7 +56,7 @@ class Tests(unittest.TestCase):
         header = {'x-access-token': login.json()['token']}
 
         rent = requests.patch(
-            Tests.api_url + f"/movies/{2}/return", headers=header)
+            Tests.api_url + f"/movies/{5}/return", headers=header)
         self.assertEqual(login.status_code, 200)
         # rent and return same day
         self.assertEqual(rent.json(), {
